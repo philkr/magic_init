@@ -44,8 +44,39 @@ def gatherInputData(net, layer_id, bottom_data, top_name):
 	return np.concatenate(W, axis=0), np.concatenate(D, axis=1)
 
 def initializeWeight(D, type, N_OUT):
-	# TODO: Compute the initialization using D
-	return np.random.normal(0, 1, (N_OUT,D.shape[1]))
+	import numpy as np
+	if D.shape[0] < N_OUT:
+		print( "  Not enough data for '%s' estimation, using elwise"%type )
+		return np.random.normal(0, 1, (N_OUT,D.shape[1]))
+	D = D - np.mean(D, axis=0, keepdims=True)
+	# PCA, ZCA, K-Means
+	assert type in ['pca', 'zca', 'kmeans', 'rand'], "Unknown initialization type '%s'"%type
+	C = np.cov(D.T)
+	s, V = np.linalg.eigh(C)
+	# order the eigenvalues
+	ids = np.argsort(s)[-N_OUT:]
+	s = s[ids]
+	V = V[:,ids]
+	s[s<1e-6] = 0
+	s[s>=1e-6] = 1. / np.sqrt(s[s>=1e-6]+1e-3)
+	S = np.diag(s)
+	if type == 'pca':
+		return S.dot(V.T)
+	elif type == 'zca':
+		return V.dot(S.dot(V.T))
+	# Whiten the data
+	wD = D.dot(V.dot(S))
+	wD /= np.linalg.norm(wD, axis=1)[:,None]
+
+	if type == 'kmeans':
+		# Run k-means
+		from sklearn.cluster import MiniBatchKMeans
+		km = MiniBatchKMeans(n_clusters = wD.shape[1], batch_size=10*wD.shape[1]).fit(wD).cluster_centers_
+	elif type == 'rand':
+		km = wD[np.random.choice(wD.shape[0], wD.shape[1], False)]
+	C = km.dot(S.dot(V.T))
+	C /= np.std(D.dot(C.T), axis=0, keepdims=True).T
+	return C
 		
 
 def initializeLayer(net, layer_id, bottom_data, top_name, bias=0, type='elwise'):
@@ -108,6 +139,7 @@ def magicInitialize(net, bias=0, NIT=10, type='elwise', bottom_names={}, top_nam
 	for i, (n, l) in enumerate(zip(net._layer_names, net.layers)):
 		# Initialize the layer
 		if len(l.blobs) > 0:
+			print( "Initializing layer '%s'"%n )
 			assert l.type in PARAMETER_LAYERS, "Unsupported parameter layer"
 			assert len(top_names[n]) == 1, "Exactly one output supported"
 			if np.sum(np.abs(l.blobs[0].data)) <= 1e-10:
@@ -124,10 +156,6 @@ def magicInitialize(net, bias=0, NIT=10, type='elwise', bottom_names={}, top_nam
 		for k in list(active_data):
 			if k not in last_used or last_used[k] == i:
 				del active_data[k]
-		
-		print( '%-3d %-10s\t%-10s'%(i, n, l.type), '\t\t', ', '.join(list(active_data)) )
-		print( [np.mean(np.abs(d)) for d in active_data.values()] )
-
 
 
 def netFromString(s, t=None):
