@@ -30,6 +30,8 @@ Checkout the project and create a symlink to caffe in the `magic_init` directory
 ln -s path/to/caffe caffe
 ```
 
+This version of the code builds on [net bottom and top name PR](https://github.com/BVLC/caffe/pull/2865).
+
 ### Examples
 
 Here is a quick example on how to initialize alexnet:
