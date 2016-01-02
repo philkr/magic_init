@@ -1,7 +1,7 @@
 
 INPUT_LAYERS = ['Data', 'ImageData']
 PARAMETER_LAYERS = ['Convolution', 'InnerProduct']
-SUPPORTED_LAYERS = ['ReLU', 'Sigmoid', 'LRN', 'Pooling']
+SUPPORTED_LAYERS = ['ReLU', 'Sigmoid', 'LRN', 'Pooling', 'Eltwise']
 STRIP_LAYER = ['Softmax', 'SoftmaxWithLoss', 'SigmoidCrossEntropyLoss']
 # Use 'Dropout' at your own risk
 # Unless Jon merges #2865 , 'Split' cannot be supported
@@ -121,7 +121,7 @@ def initializeLayer(net, layer_id, bottom_data, top_name, bias=0, type='elwise')
 
 
 
-def magicInitialize(net, bias=0, NIT=10, type='elwise', bottom_names={}, top_names={}):
+def magicInitialize(net, bias=0, NIT=10, type='elwise'):
 	import numpy as np
 	# When was a blob last used
 	last_used = {}
@@ -131,7 +131,7 @@ def magicInitialize(net, bias=0, NIT=10, type='elwise', bottom_names={}, top_nam
 			print( "WARNING: Layer type '%s' not supported! Things might go very wrong..."%l.type )
 		elif l.type not in SUPPORTED_LAYERS+PARAMETER_LAYERS+INPUT_LAYERS+STRIP_LAYER:
 			print( "Unknown layer type '%s'. double check if it is supported"%l.type )
-		for b in bottom_names[n]:
+		for b in net.bottom_names[n]:
 			last_used[b] = i
 	
 	active_data = {}
@@ -139,17 +139,20 @@ def magicInitialize(net, bias=0, NIT=10, type='elwise', bottom_names={}, top_nam
 	for i, (n, l) in enumerate(zip(net._layer_names, net.layers)):
 		# Initialize the layer
 		if len(l.blobs) > 0:
-			print( "Initializing layer '%s'"%n )
-			assert l.type in PARAMETER_LAYERS, "Unsupported parameter layer"
-			assert len(top_names[n]) == 1, "Exactly one output supported"
 			if np.sum(np.abs(l.blobs[0].data)) <= 1e-10:
-				# Fill the parameters
-				initializeLayer(net, i, {b: active_data[b] for b in bottom_names[n]}, top_names[n][0], bias, type)
+				print( "Initializing layer '%s'"%n )
+				assert l.type in PARAMETER_LAYERS, "Unsupported parameter layer"
+				assert len(net.top_names[n]) == 1, "Exactly one output supported"
 				
+				# Fill the parameters
+				initializeLayer(net, i, {b: active_data[b] for b in net.bottom_names[n]}, net.top_names[n][0], bias, type)
+			else:
+				print( "Skipping layer '%s'"%n )
+
 			# TODO: Estimate and rescale the values [TODO: Record and undo this scaling above]
 		
 		# Run the network forward
-		new_data = forward(net, i, NIT, {b: active_data[b] for b in bottom_names[n]}, top_names[n])
+		new_data = forward(net, i, NIT, {b: active_data[b] for b in net.bottom_names[n]}, net.top_names[n])
 		active_data.update(new_data)
 		
 		# Delete all unused data
@@ -171,7 +174,7 @@ def save(net):
 			r[n] = [np.copy(b.data) for b in l.blobs]
 	return r
 
-def estimateHomogenety(net, bottom_names={}, top_names={}):
+def estimateHomogenety(net):
 	# Estimate if a certain layer is homogeneous and if yes return the degree k
 	# by which the output is scaled (if input is scaled by alpha then the output
 	# is scaled by alpha^k). Return None if the layer is not homogeneous.
@@ -180,7 +183,7 @@ def estimateHomogenety(net, bottom_names={}, top_names={}):
 	last_used = {}
 	# Make sure all layers are supported, and compute the range each blob is used in
 	for i, (n, l) in enumerate(zip(net._layer_names, net.layers)):
-		for b in bottom_names[n]:
+		for b in net.bottom_names[n]:
 			last_used[b] = i
 	
 	active_data = {}
@@ -188,8 +191,8 @@ def estimateHomogenety(net, bottom_names={}, top_names={}):
 	# Read all the input data
 	for i, (n, l) in enumerate(zip(net._layer_names, net.layers)):
 		# Run the network forward
-		new_data1 = forward(net, i, 1, {b: [1*d for d in active_data[b]] for b in bottom_names[n]}, top_names[n])
-		new_data2 = forward(net, i, 1, {b: [2*d for d in active_data[b]] for b in bottom_names[n]}, top_names[n])
+		new_data1 = forward(net, i, 1, {b: [1*d for d in active_data[b]] for b in net.bottom_names[n]}, net.top_names[n])
+		new_data2 = forward(net, i, 1, {b: [2*d for d in active_data[b]] for b in net.bottom_names[n]}, net.top_names[n])
 		active_data.update(new_data1)
 		
 		if len(new_data1) == 1:
@@ -210,7 +213,7 @@ def estimateHomogenety(net, bottom_names={}, top_names={}):
 				del active_data[k]
 	return homogenety
 
-def calibrateGradientRatio(net, NIT=1, bottom_names={}, top_names={}):
+def calibrateGradientRatio(net, NIT=1):
 	import numpy as np
 	# When was a blob last used
 	last_used = {}
@@ -219,10 +222,10 @@ def calibrateGradientRatio(net, NIT=1, bottom_names={}, top_names={}):
 	for i, (n, l) in enumerate(zip(net._layer_names, net.layers)):
 		if l.type not in STRIP_LAYER:
 			last_layer = i
-		for b in bottom_names[n]:
+		for b in net.bottom_names[n]:
 			last_used[b] = i
 	# Figure out which tops are involved
-	last_tops = top_names[net._layer_names[last_layer]]
+	last_tops = net.top_names[net._layer_names[last_layer]]
 	
 	# Call forward and store the data of all data layers
 	active_data, input_data, bottom_scale = {}, {}, {}
@@ -231,9 +234,9 @@ def calibrateGradientRatio(net, NIT=1, bottom_names={}, top_names={}):
 		if i > last_layer: break
 		# Compute the input scale for parameter layers
 		if len(l.blobs) > 0:
-			bottom_scale[n] = np.mean([np.mean(np.abs(active_data[b])) for b in bottom_names[n]])
+			bottom_scale[n] = np.mean([np.mean(np.abs(active_data[b])) for b in net.bottom_names[n]])
 		# Run the network forward
-		new_data = forward(net, i, NIT, {b: active_data[b] for b in bottom_names[n]}, top_names[n])
+		new_data = forward(net, i, NIT, {b: active_data[b] for b in net.bottom_names[n]}, net.top_names[n])
 		if l.type in INPUT_LAYERS:
 			input_data.update(new_data)
 		active_data.update(new_data)
@@ -242,7 +245,7 @@ def calibrateGradientRatio(net, NIT=1, bottom_names={}, top_names={}):
 		for k in list(active_data):
 			if k not in last_used or last_used[k] == i:
 				del active_data[k]
-	output_std = np.mean(np.std(flattenData(list(active_data.values())[0]), axis=0))
+	output_std = np.mean(np.std(flattenData(active_data[last_tops[0]]), axis=0))
 	
 	for it in range(10):
 		# Reset the diffs
@@ -282,11 +285,11 @@ def calibrateGradientRatio(net, NIT=1, bottom_names={}, top_names={}):
 			if i > last_layer: break
 			# Use the stored input
 			if l.type in INPUT_LAYERS:
-				active_data.update({b: input_data[b] for b in top_names[n]})
+				active_data.update({b: input_data[b] for b in net.top_names[n]})
 			else:
 				if len(l.blobs) > 0:
 					# Add the scaling from the bottom to the biases
-					current_scale = np.mean([np.mean(np.abs(active_data[b])) for b in bottom_names[n]])
+					current_scale = np.mean([np.mean(np.abs(active_data[b])) for b in net.bottom_names[n]])
 					adj = current_scale / bottom_scale[n]
 					for b in list(l.blobs)[1:]:
 						b.data[...] *= adj
@@ -297,13 +300,13 @@ def calibrateGradientRatio(net, NIT=1, bottom_names={}, top_names={}):
 					for b in l.blobs:
 						b.data[...] *= scale
 					
-				active_data.update(forward(net, i, NIT, {b: active_data[b] for b in bottom_names[n]}, top_names[n]))
+				active_data.update(forward(net, i, NIT, {b: active_data[b] for b in net.bottom_names[n]}, net.top_names[n]))
 			# Delete all unused data
 			for k in list(active_data):
 				if k not in last_used or last_used[k] == i:
 					del active_data[k]
 		
-		new_output_std = np.mean(np.std(flattenData(list(active_data.values())[0]), axis=0))
+		new_output_std = np.mean(np.std(flattenData(active_data[last_tops[0]]), axis=0))
 		if np.abs(np.log(output_std) - np.log(new_output_std)) > 0.25:
 			# If we diverge by a factor of exp(0.25) = ~1.3, then we should check if the network is really
 			# homogeneous
@@ -322,15 +325,6 @@ def netFromString(s, t=None):
 	f.close()
 	return r
 
-def layerTypes(net_proto):
-	return {l.name: l.type for l in net_proto.layer}
-
-def layerTops(net_proto):
-	return {l.name: list(l.top) for l in net_proto.layer}
-
-def layerBottoms(net_proto):
-	return {l.name: list(l.bottom) for l in net_proto.layer}
-
 def getFileList(f):
 	from glob import glob
 	from os import path
@@ -339,6 +333,7 @@ def getFileList(f):
 def main():
 	from argparse import ArgumentParser
 	from os import path
+	import numpy as np
 	
 	parser = ArgumentParser()
 	parser.add_argument('prototxt')
@@ -382,27 +377,27 @@ def main():
 	else:
 		net.out = model()
 	
-	net_proto = net.to_proto()
-	n = netFromString('force_backward:true\n'+str(net_proto), caffe.TRAIN )
-	layer_top = layerTops( net_proto )
-	layer_bottoms = layerBottoms( net_proto )
+	n = netFromString('force_backward:true\n'+str(net.to_proto()), caffe.TRAIN )
 	
 	if args.load is not None:
 		n.copy_from(args.load)
 		# Rescale existing layers?
-		if args.fix:
-			magicFix(n, args.nit)
+		#if args.fix:
+			#magicFix(n, args.nit)
 
 	if args.z:
 		# Zero out all layers
 		for l in n.layers:
 			for b in l.blobs:
 				b.data[...] = 0
-
-	magicInitialize(n, args.bias, NIT=args.nit, type=args.type, top_names=layer_top, bottom_names=layer_bottoms)
+	if any([np.abs(l.blobs[0].data).sum() < 1e-10 for l in n.layers if len(l.blobs) > 0]):
+		print( [m for l,m in zip(n.layers, n._layer_names) if len(l.blobs) > 0 and np.abs(l.blobs[0].data).sum() < 1e-10] )
+		magicInitialize(n, args.bias, NIT=args.nit, type=args.type)
 	if args.cs:
-		#print( estimateHomogenety(n, top_names=layer_top, bottom_names=layer_bottoms) )
-		calibrateGradientRatio(n, top_names=layer_top, bottom_names=layer_bottoms)
+		# A simply helper function that lets you figure out which layers are not
+		# homogeneous
+		#print( estimateHomogenety(n) )
+		calibrateGradientRatio(n)
 	n.save(args.output_caffemodel)
 
 if __name__ == "__main__":

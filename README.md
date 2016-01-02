@@ -27,7 +27,7 @@ If you find our initialization useful in your research, please consider citing:
 
 Checkout the project and create a symlink to caffe in the `magic_init` directory:
 ```Shell
-ln -s path/to/caffe caffe
+ln -s path/to/caffe/python/caffe caffe
 ```
 
 ### Examples

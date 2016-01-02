@@ -43,7 +43,7 @@ def coloredNumbers(v, color=None, fmt='%6.2f', max_display=300, bcolors=BCOLORS)
 	r += bcolors.ENDC
 	return r
 
-def printMeanStddev(net, NIT=10, show_all=False, show_color=True, bottom_names={}, top_names={}):
+def printMeanStddev(net, NIT=10, show_all=False, show_color=True):
 	import numpy as np
 	bcolors = NOCOLORS
 	if show_color: bcolors = BCOLORS
@@ -58,17 +58,17 @@ def printMeanStddev(net, NIT=10, show_all=False, show_color=True, bottom_names={
 	last_used = {}
 	# Make sure all layers are supported, and compute the range each blob is used in
 	for i, (n, l) in enumerate(zip(net._layer_names, net.layers)):
-		for b in bottom_names[n]:
+		for b in net.bottom_names[n]:
 			last_used[b] = i
 	
 	active_data = {}
 	for i, (n, l) in enumerate(zip(net._layer_names, net.layers)):
 		# Run the network forward
-		new_data = forward(net, i, NIT, {b: active_data[b] for b in bottom_names[n]}, top_names[n])
+		new_data = forward(net, i, NIT, {b: active_data[b] for b in net.bottom_names[n]}, net.top_names[n])
 		active_data.update(new_data)
 		
-		if len(top_names[n]) > 0 and n in layer_names:
-			m = top_names[n][0]
+		if len(net.top_names[n]) > 0 and n in layer_names:
+			m = net.top_names[n][0]
 			D = flattenData(new_data[m])
 			mean = np.mean(D, axis=0)
 			stddev = np.std(D, axis=0)
@@ -126,15 +126,12 @@ def main():
 	else:
 		net.out = model()
 	
-	net_proto = net.to_proto()
-	n = netFromString('force_backward:true\n'+str(net_proto), caffe.TRAIN )
-	layer_top = layerTops( net_proto )
-	layer_bottoms = layerBottoms( net_proto )
+	n = netFromString('force_backward:true\n'+str(net.to_proto()), caffe.TRAIN )
 	
 	if args.load is not None:
 		n.copy_from(args.load)
 	
-	printMeanStddev(n, NIT=args.nit, show_all=args.all, show_color=not args.nc, top_names=layer_top, bottom_names=layer_bottoms)
+	printMeanStddev(n, NIT=args.nit, show_all=args.all, show_color=not args.nc)
 
 	# TODO: Print the gradient ratios both globally and per parameter
 
