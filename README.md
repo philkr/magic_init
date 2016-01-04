@@ -32,4 +32,15 @@ ln -s path/to/caffe caffe
 
 ### Examples
 
-*Will follow soon*
+Here is a quick example on how to initialize alexnet:
+```bash
+python magic_init.py path/to/alexnet/deploy.prototxt path/to/output.caffemodel -d "path/to/some/images/*.png" -q -nit 10 -cs
+```
+Here ```-d``` flag allows you to initialize the network using your own images. Feel free to use imagenet, Pascal, COCO or whatever you have at hand, it shouldn't make a big difference. The ```-q``` (queit) flag suppresses all the caffe logging, ```-nit``` controls the number of batches used (while ```-bs``` controls the batch size). Finally ```-cs``` rescales the gradients accross layers. This rescaling currently works best for feed-forward networks, and might not work too well for DAG structured networks (we are working on that).
+
+To run the k-means initialization use:
+```bash
+python magic_init.py path/to/alexnet/deploy.prototxt path/to/output.caffemodel -d "path/to/some/images/*.png" -q -nit 10 -cs -t kmeans
+```
+
+Finally, ```python magic_init.py -h``` should provide you with more help.
