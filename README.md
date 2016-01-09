@@ -44,3 +44,7 @@ python magic_init.py path/to/alexnet/deploy.prototxt path/to/output.caffemodel -
 ```
 
 Finally, ```python magic_init.py -h``` should provide you with more help.
+
+
+### Pro tips
+If you're numpy implementation is bases on openblas, try disabeling threading ```export OPENBLAS_NUM_THREADS=1```, it can improve the runtime performance a bit.

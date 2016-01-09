@@ -54,7 +54,11 @@ def initializeWeight(D, type, N_OUT):
 	D = D - np.mean(D, axis=0, keepdims=True)
 	# PCA, ZCA, K-Means
 	assert type in ['pca', 'zca', 'kmeans', 'rand'], "Unknown initialization type '%s'"%type
-	C = np.cov(D.T)
+	while D.shape[0] > 20*D.shape[1]:
+		D = D[::2]
+	D = np.copy(D)
+	
+	C = D.T.dot(D)#np.cov(D.T)
 	s, V = np.linalg.eigh(C)
 	# order the eigenvalues
 	ids = np.argsort(s)[-N_OUT:]
@@ -70,7 +74,7 @@ def initializeWeight(D, type, N_OUT):
 	# Whiten the data
 	wD = D.dot(V.dot(S))
 	wD /= np.linalg.norm(wD, axis=1)[:,None]
-
+	
 	if type == 'kmeans':
 		# Run k-means
 		from sklearn.cluster import MiniBatchKMeans
@@ -109,7 +113,6 @@ def initializeLayer(net, layer_id, bottom_data, top_name, bias=0, type='elwise')
 		# NOTE: This matrix multiplication is a bit large, if it's too slow,
 		#       reduce the oversampling in gatherInputData
 		d[...] = np.dot(W, T.reshape((T.shape[0],-1))).reshape(d.shape)
-	
 	# Scale the mean and initialize the bias
 	top_data = forward(net, layer_id, NIT, bottom_data, [top_name])[top_name]
 	flat_data = flattenData(top_data)
@@ -334,7 +337,6 @@ def main():
 	from argparse import ArgumentParser
 	from os import path
 	import numpy as np
-	
 	parser = ArgumentParser()
 	parser.add_argument('prototxt')
 	parser.add_argument('output_caffemodel')
@@ -393,6 +395,8 @@ def main():
 	if any([np.abs(l.blobs[0].data).sum() < 1e-10 for l in n.layers if len(l.blobs) > 0]):
 		print( [m for l,m in zip(n.layers, n._layer_names) if len(l.blobs) > 0 and np.abs(l.blobs[0].data).sum() < 1e-10] )
 		magicInitialize(n, args.bias, NIT=args.nit, type=args.type)
+	else:
+		print( "Network already initialized, skipping magic init" )
 	if args.cs:
 		# A simply helper function that lets you figure out which layers are not
 		# homogeneous
