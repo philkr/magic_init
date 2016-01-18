@@ -23,7 +23,7 @@ def flattenData(data):
 	import numpy as np
 	return np.concatenate([d.swapaxes(0, 1).reshape((d.shape[1],-1)) for d in data], axis=1).T
 
-def gatherInputData(net, layer_id, bottom_data, top_name):
+def gatherInputData(net, layer_id, bottom_data, top_name, fast=False, max_data=None):
 	# This functions gathers all input data.
 	# In order to not replicate all the internal functionality of convolutions (eg. padding ...)
 	# we gather the data in the output space and use random gaussian weights. The output of this
@@ -35,13 +35,32 @@ def gatherInputData(net, layer_id, bottom_data, top_name):
 	NIT = len(list(bottom_data.values())[0])
 	# How many times do we need to over-sample to get a full basis (out of random projections)
 	OS = int(np.ceil( np.prod(l.blobs[0].data.shape[1:]) / l.blobs[0].data.shape[0] ))
+	if fast: OS = 1
+	
+	# If we are over sampling we might run out of memory at some point, especially for filters higher up
+	# Do avoid any issues we never return more than max_data number of elements
+	subsample = None
+	
 	# Note this could cause some memory issues in the FC layers
 	W, D = [], []
 	for i in range(OS):
 		d = l.blobs[0].data
 		d[...] = np.random.normal(0, 1, d.shape)
 		W.append(1*d)
-		D.append(np.concatenate(forward(net, layer_id, NIT, bottom_data, [top_name])[top_name], axis=0))
+		# Collect the data and flatten out the convs
+		data = np.concatenate([i.swapaxes(0, 1).reshape((i.shape[1],-1)).T for i in forward(net, layer_id, NIT, bottom_data, [top_name])[top_name]], axis=0)
+		
+		# Do we need to subsample the data to save memory?
+		if subsample is None and max_data is not None:
+			# Randomly select n data representative samples
+			N = int(max_data / (data.shape[1]*OS))
+			subsample = np.arange(data.shape[0])
+			if N < data.shape[0]:
+				np.random.shuffle(subsample)
+				subsample = subsample[:N]
+		if subsample is not None:
+			data = data[subsample]
+		D.append(data)
 	return np.concatenate(W, axis=0), np.concatenate(D, axis=1)
 
 def initializeWeight(D, type, N_OUT):
@@ -54,11 +73,7 @@ def initializeWeight(D, type, N_OUT):
 	D = D - np.mean(D, axis=0, keepdims=True)
 	# PCA, ZCA, K-Means
 	assert type in ['pca', 'zca', 'kmeans', 'rand'], "Unknown initialization type '%s'"%type
-	while D.shape[0] > 20*D.shape[1]:
-		D = D[::2]
-	D = np.copy(D)
-	
-	C = D.T.dot(D)#np.cov(D.T)
+	C = D.T.dot(D)
 	s, V = np.linalg.eigh(C)
 	# order the eigenvalues
 	ids = np.argsort(s)[-N_OUT:]
@@ -74,7 +89,6 @@ def initializeWeight(D, type, N_OUT):
 	# Whiten the data
 	wD = D.dot(V.dot(S))
 	wD /= np.linalg.norm(wD, axis=1)[:,None]
-	
 	if type == 'kmeans':
 		# Run k-means
 		from sklearn.cluster import MiniBatchKMeans
@@ -86,25 +100,25 @@ def initializeWeight(D, type, N_OUT):
 	return C
 		
 
-def initializeLayer(net, layer_id, bottom_data, top_name, bias=0, type='elwise'):
+def initializeLayer(net, layer_id, bottom_data, top_name, bias=0, type='elwise', max_data=None):
 	import numpy as np
 	l = net.layers[layer_id]
 	NIT = len(list(bottom_data.values())[0])
 	
 	for p in l.blobs: p.data[...] = 0
+	fast = 'fast_' in type
+	if fast:
+		type = type.replace('fast_', '')
 	# Initialize the weights [k-means, ...]
 	if type == 'elwise':
 		d = l.blobs[0].data
 		d[...] = np.random.normal(0, 1, d.shape)
 	else: # Use the input data
 		# Gather the input data
-		T, D = gatherInputData(net, layer_id, bottom_data, top_name)
+		T, D = gatherInputData(net, layer_id, bottom_data, top_name, fast, max_data=max_data)
 		
 		# Figure out the output dimensionality of d
 		d = l.blobs[0].data
-		
-		# Prepare the data
-		D = D.swapaxes(0, 1).reshape((D.shape[1],-1)).T
 		
 		# Compute the weights
 		W = initializeWeight(D, type, N_OUT=d.shape[0])
@@ -124,7 +138,7 @@ def initializeLayer(net, layer_id, bottom_data, top_name, bias=0, type='elwise')
 
 
 
-def magicInitialize(net, bias=0, NIT=10, type='elwise'):
+def magicInitialize(net, bias=0, NIT=10, type='elwise', max_data=None):
 	import numpy as np
 	# When was a blob last used
 	last_used = {}
@@ -148,7 +162,7 @@ def magicInitialize(net, bias=0, NIT=10, type='elwise'):
 				assert len(net.top_names[n]) == 1, "Exactly one output supported"
 				
 				# Fill the parameters
-				initializeLayer(net, i, {b: active_data[b] for b in net.bottom_names[n]}, net.top_names[n][0], bias, type)
+				initializeLayer(net, i, {b: active_data[b] for b in net.bottom_names[n]}, net.top_names[n][0], bias, type, max_data=max_data)
 			else:
 				print( "Skipping layer '%s'"%n )
 
@@ -267,7 +281,7 @@ def calibrateGradientRatio(net, NIT=1):
 			if len(l.blobs) > 0:
 				assert l.type in PARAMETER_LAYERS, "Parameter layer '%s' currently not supported"%l.type
 				b = l.blobs[0]
-				ratio[n] = np.mean(np.abs(b.diff)) / np.mean(np.abs(b.data))
+				ratio[n] = np.sqrt(np.mean(b.diff**2) / np.mean(b.data**2))
 		
 		# If all layers are homogeneous, then the target ratio is the geometric mean of all ratios
 		# (assuming we want the same output)
@@ -343,13 +357,14 @@ def main():
 	parser.add_argument('-l', '--load', help='Load a pretrained model and rescale it [bias and type are not supported]')
 	parser.add_argument('-d', '--data', default=None, help='Image list to use [default prototxt data]')
 	parser.add_argument('-b', '--bias', type=float, default=0.1, help='Bias')
-	parser.add_argument('-t', '--type', default='elwise', help='Type: elwise, pca, zca, kmeans, rand (random input patches)')
+	parser.add_argument('-t', '--type', default='elwise', help='Type: elwise, pca, zca, kmeans, rand (random input patches). Add fast_ to speed up the initialization, but you might lose in precision.')
 	parser.add_argument('-z', action='store_true', help='Zero all weights and reinitialize')
 	parser.add_argument('-cs',  action='store_true', help='Correct for scaling')
 	parser.add_argument('-q', action='store_true', help='Quiet execution')
 	parser.add_argument('-s', type=float, default=1.0, help='Scale the input [only custom data "-d"]')
 	parser.add_argument('-bs', type=int, default=16, help='Batch size [only custom data "-d"]')
 	parser.add_argument('-nit', type=int, default=10, help='Number of iterations')
+	parser.add_argument('--mem-limit', type=int, default=500, help='How much memory should we use for the data buffer (MB)?')
 	parser.add_argument('--gpu', type=int, default=0, help='What gpu to run it on?')
 	args = parser.parse_args()
 	
@@ -394,7 +409,7 @@ def main():
 				b.data[...] = 0
 	if any([np.abs(l.blobs[0].data).sum() < 1e-10 for l in n.layers if len(l.blobs) > 0]):
 		print( [m for l,m in zip(n.layers, n._layer_names) if len(l.blobs) > 0 and np.abs(l.blobs[0].data).sum() < 1e-10] )
-		magicInitialize(n, args.bias, NIT=args.nit, type=args.type)
+		magicInitialize(n, args.bias, NIT=args.nit, type=args.type, max_data=args.mem_limit*1024*1024/4)
 	else:
 		print( "Network already initialized, skipping magic init" )
 	if args.cs:

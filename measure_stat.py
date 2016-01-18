@@ -43,7 +43,7 @@ def coloredNumbers(v, color=None, fmt='%6.2f', max_display=300, bcolors=BCOLORS)
 	r += bcolors.ENDC
 	return r
 
-def computeGraidentRatio(net, NIT=10):
+def computeGraidentRatio(net, NIT=1):
 	import numpy as np
 	last_layer = 0
 	for i, (n, l) in enumerate(zip(net._layer_names, net.layers)):
