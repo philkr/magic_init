@@ -47,4 +47,4 @@ Finally, ```python magic_init.py -h``` should provide you with more help.
 
 
 ### Pro tips
-If you're numpy implementation is bases on openblas, try disabeling threading ```export OPENBLAS_NUM_THREADS=1```, it can improve the runtime performance a bit.
+If you're numpy implementation is based on openblas, try disabeling threading ```export OPENBLAS_NUM_THREADS=1```, it can improve the runtime performance a bit.

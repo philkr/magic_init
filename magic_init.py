@@ -1,3 +1,4 @@
+from __future__ import print_function, division
 
 INPUT_LAYERS = ['Data', 'ImageData']
 PARAMETER_LAYERS = ['Convolution', 'InnerProduct']
@@ -49,7 +50,6 @@ def gatherInputData(net, layer_id, bottom_data, top_name, fast=False, max_data=N
 		W.append(1*d)
 		# Collect the data and flatten out the convs
 		data = np.concatenate([i.swapaxes(0, 1).reshape((i.shape[1],-1)).T for i in forward(net, layer_id, NIT, bottom_data, [top_name])[top_name]], axis=0)
-		
 		# Do we need to subsample the data to save memory?
 		if subsample is None and max_data is not None:
 			# Randomly select n data representative samples
@@ -61,7 +61,10 @@ def gatherInputData(net, layer_id, bottom_data, top_name, fast=False, max_data=N
 		if subsample is not None:
 			data = data[subsample]
 		D.append(data)
-	return np.concatenate(W, axis=0), np.concatenate(D, axis=1)
+	# In order to handle any sort of groups we want to have the samples packed in the following order:
+	# a1 a2 a3 a4 b1 b2 b3 b4 c1 ...  (where the original data was a b c and OS=4)
+	W, D = np.concatenate([w[:,None] for w in W], axis=1), np.concatenate([d[:,:,None] for d in D], axis=2)
+	return W.reshape((-1,)+W.shape[2:]), D.reshape((D.shape[0], -1)+D.shape[3:])
 
 def initializeWeight(D, type, N_OUT):
 	# Here we first whiten the data (PCA or ZCA) and then optionally run k-means
@@ -114,19 +117,31 @@ def initializeLayer(net, layer_id, bottom_data, top_name, bias=0, type='elwise',
 		d = l.blobs[0].data
 		d[...] = np.random.normal(0, 1, d.shape)
 	else: # Use the input data
+		# Are there any groups?
+		G = 1
+		bottom_names = net.bottom_names[net._layer_names[layer_id]]
+		if len(bottom_names) == 1:
+			N1 = net.blobs[bottom_names[0]].shape[1]
+			N2 = l.blobs[0].shape[1]
+			G = N1 // N2
+		
 		# Gather the input data
 		T, D = gatherInputData(net, layer_id, bottom_data, top_name, fast, max_data=max_data)
-		
+
 		# Figure out the output dimensionality of d
 		d = l.blobs[0].data
-		
-		# Compute the weights
-		W = initializeWeight(D, type, N_OUT=d.shape[0])
-		
-		# Multiply the weights by the random basis
-		# NOTE: This matrix multiplication is a bit large, if it's too slow,
-		#       reduce the oversampling in gatherInputData
-		d[...] = np.dot(W, T.reshape((T.shape[0],-1))).reshape(d.shape)
+
+		# Loop over groups
+		for g in range(G):
+			dg, Dg = d[g*(d.shape[0]//G):(g+1)*(d.shape[0]//G)], D[:,g*(D.shape[1]//G):(g+1)*(D.shape[1]//G):]
+			Tg = T[g*(T.shape[0]//G):(g+1)*(T.shape[0]//G)]
+			# Compute the weights
+			W = initializeWeight(Dg, type, N_OUT=dg.shape[0])
+			
+			# Multiply the weights by the random basis
+			# NOTE: This matrix multiplication is a bit large, if it's too slow,
+			#       reduce the oversampling in gatherInputData
+			dg[...] = np.dot(W, Tg.reshape((Tg.shape[0],-1))).reshape(dg.shape)
 	# Scale the mean and initialize the bias
 	top_data = forward(net, layer_id, NIT, bottom_data, [top_name])[top_name]
 	flat_data = flattenData(top_data)
