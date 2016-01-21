@@ -1,8 +1,12 @@
 from __future__ import print_function, division
 
 INPUT_LAYERS = ['Data', 'ImageData']
-PARAMETER_LAYERS = ['Convolution', 'InnerProduct']
-SUPPORTED_LAYERS = ['ReLU', 'Sigmoid', 'LRN', 'Pooling', 'Eltwise']
+# Layers that only support elwise
+ELWISE_LAYERS = ['Deconvolution']
+# Layers that support parameters
+PARAMETER_LAYERS = ['Convolution', 'InnerProduct']+ELWISE_LAYERS
+# All supported layers
+SUPPORTED_LAYERS = ['ReLU', 'Sigmoid', 'LRN', 'Pooling', 'Eltwise'] + PARAMETER_LAYERS + INPUT_LAYERS
 STRIP_LAYER = ['Softmax', 'SoftmaxWithLoss', 'SigmoidCrossEntropyLoss']
 # Use 'Dropout' at your own risk
 # Unless Jon merges #2865 , 'Split' cannot be supported
@@ -108,6 +112,10 @@ def initializeLayer(net, layer_id, bottom_data, top_name, bias=0, type='elwise',
 	l = net.layers[layer_id]
 	NIT = len(list(bottom_data.values())[0])
 	
+	if type!='elwise' and l.type in ELWISE_LAYERS:
+		print( "Only 'elwise' supported for layer '%s'. Falling back."%net._layer_names[layer_id] )
+		type = 'elwise'
+	
 	for p in l.blobs: p.data[...] = 0
 	fast = 'fast_' in type
 	if fast:
@@ -147,7 +155,10 @@ def initializeLayer(net, layer_id, bottom_data, top_name, bias=0, type='elwise',
 	flat_data = flattenData(top_data)
 	mu = flat_data.mean(axis=0)
 	std = flat_data.std(axis=0)
-	l.blobs[0].data[...] /= std.reshape((-1,)+(1,)*(len(l.blobs[0].data.shape)-1))
+	if l.type == 'Deconvolution':
+		l.blobs[0].data[...] /= std.reshape((1,-1,)+(1,)*(len(l.blobs[0].data.shape)-2))
+	else:
+		l.blobs[0].data[...] /= std.reshape((-1,)+(1,)*(len(l.blobs[0].data.shape)-1))
 	for b in l.blobs[1:]:
 		b.data[...] = -mu / std + bias
 
@@ -161,7 +172,7 @@ def magicInitialize(net, bias=0, NIT=10, type='elwise', max_data=None):
 	for i, (n, l) in enumerate(zip(net._layer_names, net.layers)):
 		if l.type in UNSUPPORTED_LAYERS:
 			print( "WARNING: Layer type '%s' not supported! Things might go very wrong..."%l.type )
-		elif l.type not in SUPPORTED_LAYERS+PARAMETER_LAYERS+INPUT_LAYERS+STRIP_LAYER:
+		elif l.type not in SUPPORTED_LAYERS+STRIP_LAYER:
 			print( "Unknown layer type '%s'. double check if it is supported"%l.type )
 		for b in net.bottom_names[n]:
 			last_used[b] = i
@@ -258,6 +269,8 @@ def calibrateGradientRatio(net, NIT=1):
 			last_used[b] = i
 	# Figure out which tops are involved
 	last_tops = net.top_names[net._layer_names[last_layer]]
+	for t in last_tops:
+		last_used[t] = len(net.layers)
 	
 	# Call forward and store the data of all data layers
 	active_data, input_data, bottom_scale = {}, {}, {}
