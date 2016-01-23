@@ -26,7 +26,11 @@ def forward(net, i, NIT, data, output_names):
 
 def flattenData(data):
 	import numpy as np
-	return np.concatenate([d.swapaxes(0, 1).reshape((d.shape[1],-1)) for d in data], axis=1).T
+	def flatten2D(d):
+		if len(d.shape) <= 1:
+			return d.reshape((1,-1))
+		return d.swapaxes(0, 1).reshape((d.shape[1],-1))
+	return np.concatenate([flatten2D(d) for d in data], axis=1).T
 
 def gatherInputData(net, layer_id, bottom_data, top_name, fast=False, max_data=None):
 	# This functions gathers all input data.
@@ -155,6 +159,7 @@ def initializeLayer(net, layer_id, bottom_data, top_name, bias=0, type='elwise',
 	flat_data = flattenData(top_data)
 	mu = flat_data.mean(axis=0)
 	std = flat_data.std(axis=0)
+	
 	if l.type == 'Deconvolution':
 		l.blobs[0].data[...] /= std.reshape((1,-1,)+(1,)*(len(l.blobs[0].data.shape)-2))
 	else:
@@ -256,14 +261,15 @@ def estimateHomogenety(net):
 				del active_data[k]
 	return homogenety
 
-def calibrateGradientRatio(net, NIT=1):
+def calibrateGradientRatio(net, NIT=1, strip_layer=[]):
 	import numpy as np
 	# When was a blob last used
 	last_used = {}
 	# Find the last layer to use
 	last_layer = 0
 	for i, (n, l) in enumerate(zip(net._layer_names, net.layers)):
-		if l.type not in STRIP_LAYER:
+		is_loss = np.any( [net.blob_loss_weights[t] > 0 for t in net.top_names[n]] )
+		if l.type not in STRIP_LAYER and not is_loss:
 			last_layer = i
 		for b in net.bottom_names[n]:
 			last_used[b] = i

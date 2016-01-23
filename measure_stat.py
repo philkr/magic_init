@@ -1,5 +1,5 @@
 from __future__ import print_function
-from magic_init import *
+from .magic_init import *
 
 class BCOLORS:
 	HEADER = '\033[95m'
@@ -47,7 +47,8 @@ def computeGraidentRatio(net, NIT=1):
 	import numpy as np
 	last_layer = 0
 	for i, (n, l) in enumerate(zip(net._layer_names, net.layers)):
-		if l.type not in STRIP_LAYER:
+		is_loss = np.any( [net.blob_loss_weights[t] > 0 for t in net.top_names[n]] )
+		if l.type not in STRIP_LAYER and not is_loss:
 			last_layer = i
 	last_tops = net.top_names[net._layer_names[last_layer]]
 	
@@ -114,6 +115,24 @@ def printMeanStddev(net, NIT=10, show_all=False, show_color=True, quiet=False):
 				del active_data[k]
 	return cvar
 
+def printSummary(cvar=None, cv=None, gr=None, names=None, net=None):
+	if net is not None:
+		names = net._layer_names
+		if cvar is None:
+			cvar = printMeanStddev(net, quiet=True)
+		if cv is None or gt is None:
+			cv, gr = computeGraidentRatio(net)
+	if names is None:
+		names = cvar
+	print()
+	print('  Summary  ')
+	print('-----------')
+	print()
+	print('layer name                         out cvar    rate cvar    rate mean')
+	for l in names:
+		if l in cvar and l in cv and l in gr:
+			print('%-30s   %10.2f   %10.2f   %10.2f'%(l, cvar[l], cv[l], gr[l]) )
+
 def main():
 	from argparse import ArgumentParser
 	from os import path
@@ -166,14 +185,7 @@ def main():
 	
 	cvar = printMeanStddev(n, NIT=args.nit, show_all=args.all, show_color=not args.nc, quiet=args.sm)
 	cv, gr = computeGraidentRatio(n, NIT=args.nit)
-	print()
-	print('  Summary  ')
-	print('-----------')
-	print()
-	print('layer name                         out cvar    rate cvar    rate mean')
-	for l in n._layer_names:
-		if l in cvar and l in cv and l in gr:
-			print('%-30s   %10.2f   %10.2f   %10.2f'%(l, cvar[l], cv[l], gr[l]) )
+	printSummary( cvar, cv, gr, names=n._layer_names )
 
 if __name__ == "__main__":
 	main()
