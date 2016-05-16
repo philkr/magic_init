@@ -43,7 +43,7 @@ def coloredNumbers(v, color=None, fmt='%6.2f', max_display=300, bcolors=BCOLORS)
 	r += bcolors.ENDC
 	return r
 
-def computeGraidentRatio(net, NIT=1):
+def computeGradientRatio(net, NIT=1):
 	import numpy as np
 	last_layer = 0
 	for i, (n, l) in enumerate(zip(net._layer_names, net.layers)):
@@ -143,9 +143,9 @@ def main():
 	if args.gpu is not None:
 		caffe.set_device(args.gpu)
 	
-	model = load.ProtoDesc(args.prototxt)
-	net = NetSpec()
 	if args.data is not None:
+		model = load.ProtoDesc(args.prototxt)
+		net = NetSpec()
 		fl = getFileList(args.data)
 		if len(fl) == 0:
 			print("Unknown data type for '%s'"%args.data)
@@ -156,16 +156,15 @@ def main():
 		f.flush()
 		net.data, net.label = L.ImageData(source=f.name, batch_size=args.bs, new_width=model.input_dim[-1], new_height=model.input_dim[-1], transform_param=dict(mean_value=[104,117,123], scale=args.s),ntop=2)
 		net.out = model(data=net.data, label=net.label)
+		n = netFromString('force_backward:true\n'+str(net.to_proto()), caffe.TRAIN )
 	else:
-		net.out = model()
-	
-	n = netFromString('force_backward:true\n'+str(net.to_proto()), caffe.TRAIN )
-	
+		n = caffe.Net(args.prototxt, caffe.TRAIN)
+
 	if args.load is not None:
 		n.copy_from(args.load)
 	
 	cvar = printMeanStddev(n, NIT=args.nit, show_all=args.all, show_color=not args.nc, quiet=args.sm)
-	cv, gr = computeGraidentRatio(n, NIT=args.nit)
+	cv, gr = computeGradientRatio(n, NIT=args.nit)
 	print()
 	print('  Summary  ')
 	print('-----------')
